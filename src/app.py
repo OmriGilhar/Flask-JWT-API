@@ -1,20 +1,16 @@
-# flask imports
-import json
-from flask import Flask, request, jsonify, make_response
-from flask_sqlalchemy import SQLAlchemy
-import uuid
 from werkzeug.security import generate_password_hash, check_password_hash
-import jwt
+from flask import Flask, request, jsonify, make_response
 from datetime import datetime, timedelta
+from flask_sqlalchemy import SQLAlchemy
 from functools import wraps
+import json
+import uuid
+import jwt
 import os
 
-# creates Flask object
 app = Flask(__name__)
 base = os.path.dirname(os.path.realpath(__file__))
-# configuration
-# NEVER HARDCODE YOUR CONFIGURATION IN YOUR CODE
-# INSTEAD CREATE A .env FILE AND STORE IN IT
+# This is an Demo app so no need for .env file.
 app.config['SECRET_KEY'] = '128939hb1r7g'
 # database name
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///Database.db'
@@ -24,8 +20,10 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = True
 db = SQLAlchemy(app)
 
 
-# Database ORMs
 class Data(db.Model):
+    """
+    Database ORMs
+    """
     id = db.Column(db.Integer, primary_key=True)
     public_id = db.Column(db.String(50))
     name = db.Column(db.String())
@@ -33,8 +31,11 @@ class Data(db.Model):
 
 
 # decorator for verifying the JWT
-def token_required(f):
-    @wraps(f)
+def token_required(func):
+    """ A decorator for testing user authentication
+    :param func: The wrapped function
+    """
+    @wraps(func)
     def decorated(*args, **kwargs):
         token = None
         # jwt is passed in the request header
@@ -56,7 +57,7 @@ def token_required(f):
                 'message': 'Token is invalid !!'
             }), 401
         # returns the current logged in users context to the routes
-        return f(data['public_id'], *args, **kwargs)
+        return func(data['public_id'], *args, **kwargs)
 
     return decorated
 
@@ -66,30 +67,59 @@ def token_required(f):
 @app.route('/data', methods=['POST'])
 @token_required
 def create_data(public_id):
+    """ POST Request for saving the data
+
+    The route will save the relevant content, for example:
+    for a body like this:
+    ```
+    [
+        {
+            "name": "device",
+            "strVal": "iPhone",
+            "metadata": "not interesting"
+        },
+        {
+            "name": "isAuthorized",
+            "boolVal": "false",
+            "lastSeen": "not interesting"
+        }
+    ]
+    ```
+
+    it will save 2 Data object with the following attributes:
+    D1:
+        name: device
+        val: iPhone
+    D2:
+        name: isAuthorized
+        val: false
+
+    all other json keys will be omitted.
+
+    :param public_id: The user authentication public id
+    :return: A json response including the necessary content
+    """
     user_data = request.get_json()
+
     # database ORM objects
     data_list = []
     for entry in user_data:
+        # Parsing with oneliner
         parse = [tup[1] for tup in list(filter(
             lambda item: item[0].endswith('Val') or item[0].endswith('name'),
             entry.items()))]
-        print(f"parse[0] name = {parse[0]}")
-        print(f"parse[1] val = {parse[1]}")
-        print(f"public_id = {public_id}")
         data = Data(
             public_id=public_id,
-            name=parse[0],
-            val=parse[1]
+            name=parse[0] if entry['name'] == parse[0] else parse[1],
+            val=parse[1] if entry['name'] == parse[0] else parse[0]
         )
 
         data_list.append(data)
-        print(data)
         db.session.add(data)
 
     db.session.commit()
 
-    # converting the query objects
-    # to list of jsons
+    # converting the query objects to list of jsons
     output = {}
     for d in data_list:
         output[f'{d.name}'] = d.val
@@ -100,6 +130,14 @@ def create_data(public_id):
 # route for logging user in
 @app.route('/login', methods=['POST'])
 def login():
+    """ POST Route for Login
+
+    By sending the Username & Password you will get an JWT Token for
+    later authentication.
+
+    :return: if login was successfully return JTW token, otherwise, return
+    403 with wrong password.
+    """
     # creates dictionary of form data
     auth = request.form
 
@@ -115,7 +153,8 @@ def login():
     with open(os.path.join(base, 'UserCred.json'), 'r') as load:
         cred = json.load(load)
     if check_password_hash(cred.get('password'), auth.get('password')):
-        # generates the JWT Token
+        # generates the JWT Token, Also adding a infra for expiration date
+        # for the token
         token = jwt.encode({
             'public_id': cred.get('public_id'),
             'exp': datetime.utcnow() + timedelta(minutes=30)
@@ -133,6 +172,12 @@ def login():
 # signup route
 @app.route('/signup', methods=['POST'])
 def signup():
+    """ POST Route for Signing up
+
+    Using a local json file to save the user details.
+
+    :return: indication for registration (201 code).
+    """
     # creates a dictionary of the form data
     data = request.form
 
@@ -151,8 +196,5 @@ def signup():
 
 
 if __name__ == "__main__":
-    # setting debug to True enables hot reload
-    # and also provides a debuger shell
-    # if you hit an error while running the server
     db.create_all()
-    app.run(debug=True)
+    app.run(debug=False)
